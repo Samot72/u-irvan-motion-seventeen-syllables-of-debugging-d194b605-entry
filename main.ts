@@ -7,8 +7,15 @@
 // entry.txt inside the harness output directory and re-reads the file
 // to prove the bytes survived the round trip.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 // The haiku, exactly as it will be judged:
 //   Breakpoint at midnight          (5)
@@ -76,8 +83,41 @@ function assertValid(haiku: string): number {
   return chars;
 }
 
+/** Reject trailing whitespace and control characters (except newline). */
+function assertCleanText(haiku: string): void {
+  for (const [i, line] of haiku.split("\n").entries()) {
+    if (line !== line.trimEnd()) {
+      throw new Error(`line ${i + 1} has trailing whitespace`);
+    }
+  }
+  for (let i = 0; i < haiku.length; i++) {
+    const code = haiku.charCodeAt(i);
+    if ((code < 0x20 && haiku[i] !== "\n") || code === 0x7f) {
+      throw new Error(`control character U+${code.toString(16)} at offset ${i}`);
+    }
+  }
+}
+
+/** Write the haiku twice to a scratch dir and prove the bytes match. */
+function assertDeterministic(haiku: string): void {
+  const scratch = mkdtempSync(resolve(tmpdir(), "haiku-check-"));
+  try {
+    const first = resolve(scratch, "first.txt");
+    const second = resolve(scratch, "second.txt");
+    writeFileSync(first, haiku, { encoding: "utf8" });
+    writeFileSync(second, haiku, { encoding: "utf8" });
+    if (readFileSync(first).compare(readFileSync(second)) !== 0) {
+      throw new Error("determinism check failed: two writes differ");
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function run(): void {
   const count = assertValid(HAIKU);
+  assertCleanText(HAIKU);
+  assertDeterministic(HAIKU);
 
   const dir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
   const target = resolve(dir, "entry.txt");
